@@ -60,7 +60,7 @@ int main(int argc, char *argv[]) {
 
     uint16_t numberOfUes = 10; //VEÍCULOS
 
-    uint16_t numberOfRsus = 2; //RSU
+    uint16_t numberOfRsus = 1; //RSU
 
     double minimumTdmaSlot = 0.001;         /// Time difference between 2 transmissions
     double clusterTimeMetric = 3.0;         /// Clustering Time Metric for Waiting Time calculation
@@ -135,10 +135,15 @@ int main(int argc, char *argv[]) {
     /*----------------------------------------------------------------------*/
 
     //Mobilidade para RSU
+    /*
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator> ();
     for (uint16_t i = 1; i <= rsuNodes.GetN(); i++){
      positionAlloc->Add (Vector(150 * i, 15, 0)); //DISTANCIA ENTRE RSUs [m] 
     }
+    */
+
+    Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator> ();
+    positionAlloc->Add (Vector(300, 15, 0)); //DISTANCIA ENTRE RSUs [m] }
 
     MobilityHelper mobilityRsu;
     mobilityRsu.SetMobilityModel("ns3::ConstantPositionMobilityModel");
@@ -207,27 +212,27 @@ int main(int argc, char *argv[]) {
     //Gera SD e RD para cada Veículo
     std::stringstream sdTrace;
     std::stringstream rdTrace;
-    sdTrace << "resultados/sd_a01_v2x_" << (int)i;
-    rdTrace << "resultados/rd_a01_v2x_" << (int)i;
+    sdTrace << "resultados/agrup_sd_a01_" << (int)i;
+    rdTrace << "resultados/agrup_rd_a01_" << (int)i;
  
-    double start = 5.0;
+    double start = 7.0;
     double stop = simTime; 
     
     uint16_t port = 4000;
     uint16_t m_port = port*i;
 
     EvalvidServerHelper server (m_port);
-     server.SetAttribute ("SenderTraceFilename", StringValue("video/st_highway_cif.st"));
+     server.SetAttribute ("SenderTraceFilename", StringValue("video/st_a03"));
      server.SetAttribute ("SenderDumpFilename", StringValue(sdTrace.str()));
      server.SetAttribute ("PacketPayload",UintegerValue(1014));
-     ApplicationContainer apps = server.Install(rsuNodes.Get(1));
+     ApplicationContainer apps = server.Install(rsuNodes.Get(0));
      apps.Start (Seconds (start));
      apps.Stop (Seconds (stop));
   
-    EvalvidClientHelper client (i2.GetAddress (1),m_port);
+    EvalvidClientHelper client (i2.GetAddress (0),m_port);
      client.SetAttribute ("ReceiverDumpFilename", StringValue(rdTrace.str()));
      apps = client.Install (ueNodes.Get(i));
-     apps.Start (Seconds (start));
+     apps.Start (Seconds (start + 1.0));
      apps.Stop (Seconds (stop));
    }
 
@@ -242,7 +247,7 @@ int main(int argc, char *argv[]) {
 
     /*----------------------------------------------------------------------*/
        
-    AnimationInterface anim ("resultados/v2v_netanim.xml");
+    AnimationInterface anim ("resultados/agrup_v2x.xml");
     //Cor e Descrição para RSU
     for (uint32_t i = 0; i < rsuNodes.GetN (); ++i){
         anim.UpdateNodeDescription (rsuNodes.Get (i), "RSU");

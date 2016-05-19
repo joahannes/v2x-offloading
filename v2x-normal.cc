@@ -30,8 +30,6 @@
 #include "ns3/applications-module.h"
 #include "ns3/config-store-module.h"
 #include "ns3/point-to-point-module.h"
-#include "ns3/v2v-control-client-helper.h"
-#include "ns3/v2v-mobility-model.h"
 #include "ns3/netanim-module.h"
 #include "ns3/evalvid-client-server-helper.h"
 
@@ -40,15 +38,12 @@
 
 
 using namespace ns3;
-NS_LOG_COMPONENT_DEFINE("V2vClusteringExample");
+NS_LOG_COMPONENT_DEFINE("V2vExample");
 
 
 int main(int argc, char *argv[]) {
 
     /*--------------------- Logging System Configuration -------------------*/
-    LogLevel logLevel = (LogLevel) (LOG_PREFIX_ALL | LOG_LEVEL_WARN);
-    LogComponentEnable("V2vClusteringExample", logLevel);
-    LogComponentEnable("V2vControlClient", logLevel);
 
     NS_LOG_INFO("/------------------------------------------------\\");
     NS_LOG_INFO(" - V2vClusteringExample [Example] -> Cluster vehicles communication");
@@ -60,12 +55,7 @@ int main(int argc, char *argv[]) {
 
     uint16_t numberOfUes = 10; //VEÍCULOS
 
-    uint16_t numberOfRsus = 2; //RSU
-
-    double minimumTdmaSlot = 0.001;         /// Time difference between 2 transmissions
-    double clusterTimeMetric = 3.0;         /// Clustering Time Metric for Waiting Time calculation
-    double speedVariation = 5.0;
-    double incidentWindow = 30.0;
+    uint16_t numberOfRsus = 1; //RSU
 
     double simTime = 40.0;
     /*----------------------------------------------------------------------*/
@@ -109,16 +99,20 @@ int main(int argc, char *argv[]) {
     /*----------------------------------------------------------------------*/
 
 
-    /*-------------------- Install Mobility Model in Ue --------------------*/
-    MobilityHelper ueMobility;
-    ueMobility.SetMobilityModel ("ns3::V2vMobilityModel",
-         "Mode", StringValue ("Time"),
-         "Time", StringValue ("40s"),
-         "Speed", StringValue ("ns3::ConstantRandomVariable[Constant=30.0]"),
-         "Bounds", RectangleValue (Rectangle (0, 10000, -1000, 1000))); //Valores padrão: 0, 10000, -1000, 1000
-    ueMobility.Install(ueNodes);
+    /*-------------------- Instala Mobilidade nos Veículos --------------------*/
+    MobilityHelper mobility;
 
-    /// Create a 3 line grid of vehicles
+    mobility.SetPositionAllocator ("ns3::GridPositionAllocator",
+                                 "MinX", DoubleValue (10.0),
+                                 "MinY", DoubleValue (10.0),
+                                 "DeltaX", DoubleValue (5.0),
+                                 "DeltaY", DoubleValue (2.0),
+                                 "GridWidth", UintegerValue (3),
+                                 "LayoutType", StringValue ("RowFirst"));
+
+    mobility.SetMobilityModel ("ns3::ConstantVelocityMobilityModel");
+    mobility.Install (ueNodes);
+
     for (uint16_t i = 0; i < numberOfUes; i++)
     {
         if(i % 3 == 0){
@@ -132,7 +126,16 @@ int main(int argc, char *argv[]) {
         }
 
     }
-    /*----------------------------------------------------------------------*/
+
+      // setup a uniform random variable for the speed
+      Ptr<UniformRandomVariable> rvar = CreateObject<UniformRandomVariable>();
+      // for each node set up its speed according to the random variable
+      for (NodeContainer::Iterator iter= ueNodes.Begin(); iter!=ueNodes.End(); ++iter){
+          Ptr<Node> tmp_node = (*iter);
+          // select the speed from (15,25) m/s
+          double speed = rvar->GetValue(15, 25);
+          tmp_node->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(Vector(speed, 0, 0));
+      }
 
     //Mobilidade para RSU
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator> ();
@@ -145,6 +148,8 @@ int main(int argc, char *argv[]) {
     mobilityRsu.SetPositionAllocator(positionAlloc);
     mobilityRsu.Install(rsuNodes);
 
+    /*----------------------------------------------------------------------*/
+    
     /*-------------------------- Setup Wifi nodes --------------------------*/
     // The below set of helpers will help us to put together the wifi NICs we want
     YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default ();
@@ -180,26 +185,6 @@ int main(int argc, char *argv[]) {
     //Configuração de IP da RSU
     Ipv4InterfaceContainer i2 = ipv4h.Assign (wifiDevices2); //RSU
 
-    uint16_t controlPort = 3999;
-    ApplicationContainer controlApps; //Para troca de mensagens
-
-    /**
-     * Setting Control Channel
-     */
-    for (uint32_t u = 0; u < ueNodes.GetN(); ++u) {
-
-        //!< Initial TDMA UE synchronization Function
-        double tdmaStart = (u+1)*minimumTdmaSlot;
-
-        Ptr<V2vMobilityModel> mobilityModel = ueNodes.Get(u)->GetObject<V2vMobilityModel>();
-        mobilityModel->SetSpeedVariation(speedVariation);
-        V2vControlClientHelper ueClient("ns3::UdpSocketFactory", Address(InetSocketAddress(Ipv4Address::GetBroadcast(), controlPort)),
-                "ns3::UdpSocketFactory",InetSocketAddress(Ipv4Address::GetAny(), controlPort),
-                mobilityModel, tdmaStart, numberOfUes, minimumTdmaSlot, clusterTimeMetric);
-        ueClient.SetAttribute ("IncidentWindow", DoubleValue(incidentWindow));
-        controlApps.Add(ueClient.Install(ueNodes.Get(u)));
-    }
-
 //TESTE DE TRANSMISSÃO DE VÍDEO
 
 //-------------Rodar aplicação EvalVid
@@ -207,8 +192,8 @@ int main(int argc, char *argv[]) {
     //Gera SD e RD para cada Veículo
     std::stringstream sdTrace;
     std::stringstream rdTrace;
-    sdTrace << "resultados/sd_a01_v2x_" << (int)i;
-    rdTrace << "resultados/rd_a01_v2x_" << (int)i;
+    sdTrace << "resultados/normal_sd_a01_" << (int)i;
+    rdTrace << "resultados/normal_rd_a01_" << (int)i;
  
     double start = 5.0;
     double stop = simTime; 
@@ -217,14 +202,14 @@ int main(int argc, char *argv[]) {
     uint16_t m_port = port*i;
 
     EvalvidServerHelper server (m_port);
-     server.SetAttribute ("SenderTraceFilename", StringValue("video/st_highway_cif.st"));
+     server.SetAttribute ("SenderTraceFilename", StringValue("video/st_a03"));
      server.SetAttribute ("SenderDumpFilename", StringValue(sdTrace.str()));
      server.SetAttribute ("PacketPayload",UintegerValue(1014));
-     ApplicationContainer apps = server.Install(rsuNodes.Get(1));
+     ApplicationContainer apps = server.Install(rsuNodes.Get(0));
      apps.Start (Seconds (start));
      apps.Stop (Seconds (stop));
   
-    EvalvidClientHelper client (i2.GetAddress (1),m_port);
+    EvalvidClientHelper client (i2.GetAddress (0),m_port);
      client.SetAttribute ("ReceiverDumpFilename", StringValue(rdTrace.str()));
      apps = client.Install (ueNodes.Get(i));
      apps.Start (Seconds (start));
@@ -233,16 +218,13 @@ int main(int argc, char *argv[]) {
 
 //FIM TESTE DE TRANSMISSÃO DE VÍDEO
 
-    controlApps.Start (Seconds(0.1));
-    controlApps.Stop (Seconds(simTime-0.1));
-
     //AsciiTraceHelper ascii;
     //wifiPhy.EnableAsciiAll(ascii.CreateFileStream ("resultados/socket-options-ipv4.txt"));
     //wifiPhy.EnablePcapAll ("resultados/socket.pcap", false);
 
     /*----------------------------------------------------------------------*/
        
-    AnimationInterface anim ("resultados/v2v_netanim.xml");
+    AnimationInterface anim ("resultados/normal_v2x.xml");
     //Cor e Descrição para RSU
     for (uint32_t i = 0; i < rsuNodes.GetN (); ++i){
         anim.UpdateNodeDescription (rsuNodes.Get (i), "RSU");
