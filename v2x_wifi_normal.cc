@@ -30,8 +30,6 @@
 #include "ns3/applications-module.h"
 #include "ns3/config-store-module.h"
 #include "ns3/point-to-point-module.h"
-#include "ns3/v2v-control-client-helper.h"
-#include "ns3/v2v-mobility-model.h"
 #include "ns3/netanim-module.h"
 #include "ns3/evalvid-client-server-helper.h"
 
@@ -53,12 +51,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-
 #define SIMULATION_TIME_FORMAT(s) Seconds(s)
 
-
 using namespace ns3;
-NS_LOG_COMPONENT_DEFINE("V2vClusteringExample");
+
+NS_LOG_COMPONENT_DEFINE("V2vExample");
 
 void ThroughputMonitor (FlowMonitorHelper* fmhelper, Ptr<FlowMonitor> monitor, Gnuplot2dDataset dataset){
 
@@ -158,9 +155,6 @@ void ImprimeMetricas (FlowMonitorHelper* fmhelper, Ptr<FlowMonitor> monitor){
 int main(int argc, char *argv[]) {
 
     /*--------------------- Logging System Configuration -------------------*/
-    LogLevel logLevel = (LogLevel) (LOG_PREFIX_ALL | LOG_LEVEL_WARN);
-    LogComponentEnable("V2vClusteringExample", logLevel);
-    LogComponentEnable("V2vControlClient", logLevel);
 
     NS_LOG_INFO("/------------------------------------------------\\");
     NS_LOG_INFO(" - V2vClusteringExample [Example] -> Cluster vehicles communication");
@@ -173,11 +167,6 @@ int main(int argc, char *argv[]) {
     uint16_t numberOfUes = 10; //VEÍCULOS
 
     uint16_t numberOfRsus = 1; //RSU
-
-    double minimumTdmaSlot = 0.001;         /// Time difference between 2 transmissions
-    double clusterTimeMetric = 3.0;         /// Clustering Time Metric for Waiting Time calculation
-    double speedVariation = 5.0;
-    double incidentWindow = 30.0;
 
     double simTime = 40.0;
     /*----------------------------------------------------------------------*/
@@ -221,16 +210,20 @@ int main(int argc, char *argv[]) {
     /*----------------------------------------------------------------------*/
 
 
-    /*-------------------- Install Mobility Model in Ue --------------------*/
-    MobilityHelper ueMobility;
-    ueMobility.SetMobilityModel ("ns3::V2vMobilityModel",
-         "Mode", StringValue ("Time"),
-         "Time", StringValue ("40s"),
-         "Speed", StringValue ("ns3::ConstantRandomVariable[Constant=30.0]"),
-         "Bounds", RectangleValue (Rectangle (0, 9000, -1000, 1000))); //Valores padrão: 0, 10000, -1000, 1000
-    ueMobility.Install(ueNodes);
+    /*-------------------- Instala Mobilidade nos Veículos --------------------*/
+    MobilityHelper mobility;
 
-    /// Create a 3 line grid of vehicles
+    mobility.SetPositionAllocator ("ns3::GridPositionAllocator",
+                                 "MinX", DoubleValue (10.0),
+                                 "MinY", DoubleValue (10.0),
+                                 "DeltaX", DoubleValue (5.0),
+                                 "DeltaY", DoubleValue (2.0),
+                                 "GridWidth", UintegerValue (3),
+                                 "LayoutType", StringValue ("RowFirst"));
+
+    mobility.SetMobilityModel ("ns3::ConstantVelocityMobilityModel");
+    mobility.Install (ueNodes);
+
     for (uint16_t i = 0; i < numberOfUes; i++)
     {
         if(i % 3 == 0){
@@ -244,24 +237,30 @@ int main(int argc, char *argv[]) {
         }
 
     }
-    /*----------------------------------------------------------------------*/
+
+      // setup a uniform random variable for the speed
+      Ptr<UniformRandomVariable> rvar = CreateObject<UniformRandomVariable>();
+      // for each node set up its speed according to the random variable
+      for (NodeContainer::Iterator iter= ueNodes.Begin(); iter!=ueNodes.End(); ++iter){
+          Ptr<Node> tmp_node = (*iter);
+          // select the speed from (15,25) m/s
+          double speed = rvar->GetValue(15, 25);
+          tmp_node->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(Vector(speed, 0, 0));
+      }
 
     //Mobilidade para RSU
-    /*
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator> ();
     for (uint16_t i = 1; i <= rsuNodes.GetN(); i++){
-     positionAlloc->Add (Vector(150 * i, 15, 0)); //DISTANCIA ENTRE RSUs [m] 
+     positionAlloc->Add (Vector(300 * i, 15, 0)); //DISTANCIA ENTRE RSUs [m] 
     }
-    */
-
-    Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator> ();
-    positionAlloc->Add (Vector(300, 15, 0)); //DISTANCIA ENTRE RSUs [m] }
 
     MobilityHelper mobilityRsu;
     mobilityRsu.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     mobilityRsu.SetPositionAllocator(positionAlloc);
     mobilityRsu.Install(rsuNodes);
 
+    /*----------------------------------------------------------------------*/
+    
     /*-------------------------- Setup Wifi nodes --------------------------*/
     // The below set of helpers will help us to put together the wifi NICs we want
     YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default ();
@@ -297,90 +296,42 @@ int main(int argc, char *argv[]) {
     //Configuração de IP da RSU
     Ipv4InterfaceContainer i2 = ipv4h.Assign (wifiDevices2); //RSU
 
-    uint16_t controlPort = 3999;
-    ApplicationContainer controlApps; //Para troca de mensagens
-
-    /**
-     * Setting Control Channel
-     */
-    for (uint32_t u = 0; u < ueNodes.GetN(); ++u) {
-
-        //!< Initial TDMA UE synchronization Function
-        double tdmaStart = (u+1)*minimumTdmaSlot;
-
-        Ptr<V2vMobilityModel> mobilityModel = ueNodes.Get(u)->GetObject<V2vMobilityModel>();
-        mobilityModel->SetSpeedVariation(speedVariation);
-        V2vControlClientHelper ueClient("ns3::UdpSocketFactory", Address(InetSocketAddress(Ipv4Address::GetBroadcast(), controlPort)),
-                "ns3::UdpSocketFactory",InetSocketAddress(Ipv4Address::GetAny(), controlPort),
-                mobilityModel, tdmaStart, numberOfUes, minimumTdmaSlot, clusterTimeMetric);
-        ueClient.SetAttribute ("IncidentWindow", DoubleValue(incidentWindow));
-        controlApps.Add(ueClient.Install(ueNodes.Get(u)));
-    }
-
 //TESTE DE TRANSMISSÃO DE VÍDEO
 
-//Caminho para salvar os arquivos de envio e recebimento
-string caminho = "resultados/agrupamento/";
-
-//01
-//Transmissão do CH para demais veículos do grupo
-    std::string sd_CH = caminho + "sd_a01_CH";
-    std::string rd_CH = caminho + "rd_a01_CH";
-  
-  //ServidorEvalvid:
-    uint16_t port_video = 9500;
-    EvalvidServerHelper server (port_video);
-    server.SetAttribute ("SenderTraceFilename", StringValue("video/st_a03.st"));
-    server.SetAttribute ("SenderDumpFilename", StringValue(sd_CH));
-    server.SetAttribute ("PacketPayload",UintegerValue(1014));
-    ApplicationContainer apps = server.Install (rsuNodes.Get(0)); //Servidor na nuvem como fonte
-    apps.Start (Seconds (4.0));
-    apps.Stop (Seconds (15.0));
-
-  //ClienteEvalvid:
-    EvalvidClientHelper client (i2.GetAddress (0), port_video);
-    client.SetAttribute ("ReceiverDumpFilename", StringValue(rd_CH));
-    apps = client.Install (ueNodes.Get(9)); //N10 como destino
-    apps.Start (Seconds (4.0));
-    apps.Stop (Seconds (15.0));
-//Fim_V2I
-
-//02
 //-------------Rodar aplicação EvalVid
-  for (uint32_t i = 0; i < ueNodes.GetN() - 1; i++){
+  for (uint32_t i = 0; i < ueNodes.GetN(); i++){
     //Gera SD e RD para cada Veículo
     
     string video_trans = "video/st_a03.st";
+    string caminho = "resultados/normal/";
 
     std::stringstream sdTrace;
     std::stringstream rdTrace;
     sdTrace << caminho + "sd_a01_" << (int)i;
     rdTrace << caminho + "rd_a01_" << (int)i;
  
-    double start = 17.0;
+    double start = 10.0;
     double stop = simTime; 
     
-    uint16_t port = 1000;
-    uint16_t m_port = port * i + 1000; //Para alcançar o nó ZERO quando i = 0
+    uint16_t port = 2000;
+    uint16_t m_port = port * i + 2000; //Para alcançar o nó ZERO quando i = 0
 
     EvalvidServerHelper server (m_port);
      server.SetAttribute ("SenderTraceFilename", StringValue(video_trans));
      server.SetAttribute ("SenderDumpFilename", StringValue(sdTrace.str()));
      server.SetAttribute ("PacketPayload",UintegerValue(1014));
-     ApplicationContainer apps = server.Install(ueNodes.Get(9));
+     ApplicationContainer apps = server.Install(rsuNodes.Get(0));
      apps.Start (Seconds (start));
      apps.Stop (Seconds (stop));
   
-    EvalvidClientHelper client (i1.GetAddress (9),m_port);
+    EvalvidClientHelper client (i2.GetAddress (0),m_port);
      client.SetAttribute ("ReceiverDumpFilename", StringValue(rdTrace.str()));
      apps = client.Install (ueNodes.Get(i));
      apps.Start (Seconds (start));
      apps.Stop (Seconds (stop));
    }
-//FIM TESTE DE TRANSMISSÃO DE VÍDEO
 
-    controlApps.Start (Seconds(0.1));
-    controlApps.Stop (Seconds(simTime-0.1));
+//FIM TESTE DE TRANSMISSÃO DE VÍDEO
 
     //AsciiTraceHelper ascii;
     //wifiPhy.EnableAsciiAll(ascii.CreateFileStream ("resultados/socket-options-ipv4.txt"));
@@ -388,23 +339,23 @@ string caminho = "resultados/agrupamento/";
 
     /*----------------------------------------------------------------------*/
        
-    AnimationInterface anim ("resultados/agrupamento/agrup_v2x_netanim.xml");
+    AnimationInterface anim ("resultados/normal/normal_v2x_netanim.xml");
     //Cor e Descrição para RSU
     for (uint32_t i = 0; i < rsuNodes.GetN (); ++i){
         anim.UpdateNodeDescription (rsuNodes.Get (i), "RSU");
         anim.UpdateNodeColor (rsuNodes.Get (i), 0, 255, 0);
     }
 
-    //Monitor de fluxo
+        //Monitor de fluxo
     Ptr<FlowMonitor> monitor;
     FlowMonitorHelper fmhelper;
     monitor = fmhelper.InstallAll();
-    
+
     /*---------------------- Simulation Stopping Time ----------------------*/
     Simulator::Stop(SIMULATION_TIME_FORMAT(simTime));
     /*----------------------------------------------------------------------*/
 
-    string tipo = "graficos/agrupamento/Agrupamento_";
+    string tipo = "graficos/normal/Normal_";
 
     //Throughput
     string vazao = tipo + "FlowVSThroughput";
@@ -502,7 +453,7 @@ string caminho = "resultados/agrupamento/";
     gnuplot3.GenerateOutput (plotFile3);    //Escreve no arquivo.
     plotFile3.close ();        // fecha o arquivo.
 
-    monitor->SerializeToXmlFile("resultados/agrupamento/flow_agrupamento.xml", true, true);
+    monitor->SerializeToXmlFile("resultados/normal/flow_normal.xml", true, true);
 
     Simulator::Destroy();
     /*----------------------------------------------------------------------*/
